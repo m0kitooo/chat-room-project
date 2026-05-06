@@ -1,0 +1,12 @@
+{
+  "name": "chat-room",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev:backend": "pnpm --filter @chat-room/backend dev",
+    "dev:frontend": "pnpm --filter @chat-room/frontend dev",
+    "dev": "pnpm --parallel --filter './packages/*' dev",
+    "build": "pnpm --recursive build"
+  }
+}

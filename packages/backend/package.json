@@ -1,0 +1,42 @@
+{
+  "name": "@chat-room/backend",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "author": "mokitooo",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.2",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --exec tsx ./src/index.ts",
+    "build": "tsc",
+    "start": "node ./dist/src/index.js"
+  },
+  "dependencies": {
+    "@chat-room/shared": "workspace:*",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@types/express": "^5.0.6",
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "express": "5.2.1",
+    "jose": "^6.2.2",
+    "nodemailer": "^8.0.6",
+    "pg": "^8.20.0",
+    "uuid": "^14.0.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/node": "25.6.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pg": "^8.20.0",
+    "@types/ws": "^8.18.1",
+    "nodemon": "^3.1.14",
+    "prisma": "^7.8.0",
+    "tsx": "^4.21.0",
+    "typescript": "6.0.3"
+  }
+}
