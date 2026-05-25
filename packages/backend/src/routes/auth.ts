@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { parseRequestBody } from '../middleware/request-parse.js';
+import { parseRequestBody, parseRequestParams } from '../middleware/request-parse.js';
 import { AuthJWTPayload, ErrorResponseDTO } from '../types/index.js';
 import z from 'zod';
 import { registerSchema, loginSchema, type RegisterPayload, type LoginPayload } from '@chat-room/shared';
@@ -13,11 +13,15 @@ import { transporter } from '../lib/nodemailer.js';
 import { JOSEError } from 'jose/errors';
 import log from '../lib/winston.js'
 import { guard } from '../middleware/auth-handler.js';
+import crypto from 'node:crypto';
+import { InvalidTokenError } from '../errors/InvalidTokenError.js';
 
 type RegisterRequestDTO = RegisterPayload;
 type LoginRequstDTO = LoginPayload;
 type AuthDTO = Omit<{ id: string, accessToken: string } & RegisterRequestDTO, 'password'>;
 type RegisterDTO = Omit<AuthDTO, 'accessToken'>;
+
+const VERIFICATION_TOKEN_HASH_ALG = 'sha256';
 
 const generateAccessToken = async (payload: AuthJWTPayload) => {
   return new jose.SignJWT(payload as Record<string, unknown>)
@@ -29,16 +33,18 @@ const generateAccessToken = async (payload: AuthJWTPayload) => {
 
 type VerificationJWTPayload = { userId: string };
 
-const generateVerificationToken = async (payload: VerificationJWTPayload) => {
-  return new jose.SignJWT(payload as Record<string, unknown>)
-    .setProtectedHeader({ alg: 'HS256' })
-    .setExpirationTime(config.jwt.verification.expiresIn)
-    .setIssuedAt()
-    .sign(config.jwt.verification.secret);
+const generateVerificationToken = () => {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  return crypto.createHash(VERIFICATION_TOKEN_HASH_ALG).update(rawToken).digest('hex');
 };
 
 const verifyVerificationToken = async (token: string) => {
-  return jose.jwtVerify<VerificationJWTPayload>(token, config.jwt.verification.secret);
+  const hashedToken = crypto.createHash(VERIFICATION_TOKEN_HASH_ALG).update(token).digest('hex');
+  const user = await prisma.user.findFirst({ where: {
+    verificationToken: hashedToken 
+  }});
+  // if (!user) throw new InvalidTokenError('Invalid token provided');
+  return user;
 };
 
 export const formatTimeSec = (value: number): string => {
@@ -58,21 +64,21 @@ export const formatTimeSec = (value: number): string => {
     value %= minInSec;
   }
 
-  const labelQuantity = (quantity: number, label: string) => quantity > 0 
+  const labelQuantity = (quantity: number, label: string) => quantity > 0
     ? quantity > 1
       ? `${quantity} ${label}s`
       : `${quantity} ${label}`
     : '';
 
   return [labelQuantity(days, 'day'), labelQuantity(hours, 'hour'), labelQuantity(minutes, 'minute'), labelQuantity(value, 'second')]
-    .filter(Boolean)  
+    .filter(Boolean)
     .join(' ');
 };
 
 const sendAccountActivationEmail = (userEmail: string, activationToken: string) => {
   const activationUrl = `${config.server.appUrl}/api/auth/verify?token=${activationToken}`;
   return transporter.sendMail({
-    from: `"Chat Room" <${config.smtp.user}>`,  
+    from: `"Chat Room" <${config.smtp.user}>`,
     to: userEmail,
     subject: 'Activate your account',
     html: /*html*/ `
@@ -93,7 +99,7 @@ const sendAccountActivationEmail = (userEmail: string, activationToken: string) 
                       <h1 style="margin:0 0 16px;font-size:22px;color:#18181b;">Activate your account</h1>
                       <p style="margin:0 0 24px;font-size:15px;color:#52525b;line-height:1.6;">
                         Thanks for signing up! Click the button below to activate your account.
-                        This link expires in <strong>${formatTimeSec(config.jwt.verification.expiresIn)}</strong>.
+                        This link expires in <strong>${formatTimeSec(config.verificationToken.expiresIn)}</strong>.
                       </p>
                       <a href="${activationUrl}"
                          style="display:inline-block;padding:12px 28px;background-color:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;">
@@ -116,22 +122,26 @@ const sendAccountActivationEmail = (userEmail: string, activationToken: string) 
   });
 };
 
+// const calcVerificationTokenExpiresAt
+
 const register = async (req: Request<{}, any, RegisterRequestDTO>, res: Response<RegisterDTO | ErrorResponseDTO>, next: NextFunction) => {
   const hashedPassword = await bcrypt.hash(req.body.password, config.bcrypt.rounds);
   try {
+    const verificationToken = generateVerificationToken();
     const createdUser = await prisma.user.create({
       data: {
         username: req.body.username,
         email: req.body.email,
-        password: hashedPassword
+        password: hashedPassword,
+        verificationToken: verificationToken,
+        verificationTokenExpiresAt: new Date(Date.now() + config.verificationToken.expiresIn * 1000)
       }
     });
     log.info(`User registered with ID: ${createdUser.id}`);
-    const verificationToken = await generateVerificationToken({ userId: createdUser.id });
     await sendAccountActivationEmail(createdUser.email, verificationToken);
-    res.status(201).json({ 
-      id: createdUser.id, 
-      username: createdUser.username, 
+    res.status(201).json({
+      id: createdUser.id,
+      username: createdUser.username,
       email: createdUser.email
     });
   } catch (err) {
@@ -163,43 +173,61 @@ const login = async (req: Request<{}, any, LoginRequstDTO>, res: Response<AuthDT
 
   const user = await prisma.user.findFirst({
     select: { id: true, username: true, email: true, password: true, isActive: true, roles: true },
-    where: { 
+    where: {
       OR: [{ username: req.body.identifier }, { email: req.body.identifier }]
     }
   });
   if (!user) return res.status(401).json(invalidUsernameOrPasswordResBody);
-  if (!user.isActive) return res.status(403).json({ errorType: 'ACCOUNT_NOT_ACTIVATED', message: 'Account not activated, check out your email address'});
+  if (!user.isActive) return res.status(403).json({ errorType: 'ACCOUNT_NOT_ACTIVATED', message: 'Account not activated, check out your email address' });
 
   const isMatch = await bcrypt.compare(req.body.password, user.password);
   if (!isMatch) return res.json(invalidUsernameOrPasswordResBody);
-  
+
   res.status(200).json({
     id: user.id,
-    username: user.username, 
-    email: user.email, 
+    username: user.username,
+    email: user.email,
     accessToken: await generateAccessToken({ userId: user.id, username: user.username, email: user.email, roles: user.roles })
   });
   log.info(`User with ID ${user.id} logged in`);
 };
 
-const verify = async (req: Request, res: Response, next: NextFunction) => {
+const verify = async (req: Request, res: Response<{ message: string } | ErrorResponseDTO>, next: NextFunction) => {
   const token = req.query.token as string;
   if (!token) return res.status(400).json({ errorType: 'BAD_REQUEST', message: 'Token is required' });
   try {
-    const { payload } = await verifyVerificationToken(token);
-    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    const user = await verifyVerificationToken(token);
+    // const user = await prisma.user.findUnique({ where: { id: payload.userId } });
     if (!user) return res.status(400).json({ errorType: 'INVALID_TOKEN', message: 'Invalid activation token' });
     if (user.isActive) return res.status(400).json({ errorType: 'ALREADY_ACTIVATED', message: 'Account already activated' });
+    if (user.verificationTokenExpiresAt < new Date()) return res.status(400).json({ errorType: 'TOKEN_EXPIRED', message: 'Your verification link expired' });
     await prisma.user.update({
       where: { id: user.id },
       data: { isActive: true }
     });
     res.status(200).json({ message: 'Account activated successfully' });
   } catch (err) {
-    if (err instanceof JOSEError) return res.status(400).json({ errorType: 'INVALID_TOKEN', message: 'Invalid activation token' }); 
+    if (err instanceof JOSEError) return res.status(400).json({ errorType: 'INVALID_TOKEN', message: 'Invalid activation token' });
     next(err);
   }
 };
+
+async function resendVerificationEmail(req: Request<{ email: string}>, res: Response<void | ErrorResponseDTO>) {
+  const user = await prisma.user.findFirst({ where: { email: req.params.email } });
+  if (!user) return res.status(404).json({ errorType: 'NOT_FOUND', message: 'User not found' });
+  if (user.isActive) return res.status(400).json({ errorType: 'ALREADY_ACTIVATED', message: 'Account already activated' });
+
+  const newToken = generateVerificationToken();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      verificationToken: newToken,
+      verificationTokenExpiresAt: new Date(Date.now() + config.verificationToken.expiresIn * 1000)
+    }
+  });
+  await sendAccountActivationEmail(req.params.email, generateVerificationToken());
+  res.status(200).send();
+}
 
 // function authWss(req: Request, res: Response) {
 
@@ -209,6 +237,10 @@ const authRouter = Router();
 authRouter.post('/auth/login', parseRequestBody(loginSchema), login);
 authRouter.post('/auth/register', parseRequestBody(registerSchema), register);
 authRouter.get('/auth/verify', verify);
+authRouter.post('/auth/verify/resend/:email',
+  parseRequestParams(z.object({ email: z.email() })),
+  resendVerificationEmail 
+);
 // authRouter.post('/auth/ws-ticket', handleAuth)
 
 export { authRouter };

@@ -28,10 +28,14 @@ export const config = {
       secret: jose.base64url.decode(env.JWT_ACCESS_SECRET_BASE64URL),
       expiresIn: env.JWT_ACCESS_EXPIRES_IN,
     },
-    verification: {
-      secret: jose.base64url.decode(env.JWT_VERIFICATION_SECRET_BASE64URL),
-      expiresIn: env.JWT_VERIFICATION_EXPIRES_IN,
-    },
+    // verification: {
+    //   secret: jose.base64url.decode(env.JWT_VERIFICATION_SECRET_BASE64URL),
+    //   expiresIn: env.JWT_VERIFICATION_EXPIRES_IN,
+    // },
+  },
+
+  verificationToken: {
+    expiresIn: env.VERIFICATION_TOKEN_EXPIRES_IN,
   },
 
   smtp: {

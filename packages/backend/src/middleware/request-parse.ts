@@ -17,4 +17,18 @@ export const parseRequestBody = (schema: ZodType) =>
     next();
   };
 
+export const parseRequestParams = (schema: ZodType<Record<string, string>>) =>
+  (req: Request, res: Response<ErrorResponseDTO>, next: NextFunction) => {
+    const parsed = schema.safeParse(req.params);
+    if (!parsed.success) {
+      return res.status(400).json({
+        errorType: 'BAD_REQUEST',
+        message: 'Invalid request params',
+        additionalData: formatZodIssues(parsed.error.issues)
+      });
+    }
+    req.params = parsed.data;
+    next();
+  };
+
 // export const parseRequestQuery = (schema: ZodType) =>
